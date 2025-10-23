@@ -13,15 +13,73 @@ document.getElementById("summarize").addEventListener("click", async () => {
     }
 
     chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+      // Step 1: Attempt to send the message
       chrome.tabs.sendMessage(
         tab.id,
         { type: "GET_ARTICLE_TEXT" },
         async (res) => {
+          // Check for the error *immediately* after the message attempt
+          if (chrome.runtime.lastError) {
+            // This means the listener in content.js did not exist (the page wasn't ready or is a restricted page)
+            console.log(
+              "Content script not found, injecting now:",
+              chrome.runtime.lastError.message
+            );
+
+            // Define the function that content.js currently does (you need to move the content of content.js here)
+            // Since content.js is a separate file, we will inject it.
+
+            try {
+              const injectionResults = await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ["content.js"],
+              });
+
+              // Now that content.js is loaded, attempt the sendMessage again (recursively or repeat logic)
+              // To avoid complexity, we can directly run the getArticleText function content here:
+              const getArticleTextFunction = () => {
+                const article = document.querySelector("article");
+                if (article) return article.innerText;
+
+                const paragraphs = Array.from(document.querySelectorAll("p"));
+                return paragraphs.map((p) => p.innerText).join("\n");
+              };
+
+              const directInjectionResults =
+                await chrome.scripting.executeScript({
+                  target: { tabId: tab.id },
+                  func: getArticleTextFunction, // Run the function directly
+                });
+
+              const articleText = directInjectionResults[0].result;
+
+              if (!articleText) {
+                resultDiv.innerText =
+                  "Could not extract article text from this page after manual injection.";
+                return;
+              }
+
+              // Proceed with API call
+              const summary = await getGeminiSummary(
+                articleText,
+                summaryType,
+                result.geminiApiKey
+              );
+              resultDiv.innerText = summary;
+            } catch (error) {
+              resultDiv.innerText = `Error after manual injection: ${
+                error.message || "Failed to inject content script."
+              }`;
+            }
+            return; // Stop the original flow
+          }
+
+          // This is the success path (content.js was already running)
           if (!res || !res.text) {
             resultDiv.innerText =
               "Could not extract article text from this page.";
             return;
-          }
+          } // Proceed with API call
 
           try {
             const summary = await getGeminiSummary(
@@ -85,7 +143,7 @@ async function getGeminiSummary(text, summaryType, apiKey) {
 
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
